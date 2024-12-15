@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Аналіз настрою відгуків</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.15.0/tf.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        textarea {
+            width: 100%;
+            height: 150px;
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            resize: vertical;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:disabled {
+            background-color: #cccccc;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 4px;
+            display: none;
+        }
+        .loading {
+            color: #666;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Аналіз настрою відгуків</h1>
+        <div id="status"></div>
+        <textarea id="review-text" placeholder="Введіть ваш відгук англійською мовою..."></textarea>
+        <button id="analyze-button" disabled>Аналізувати</button>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        let model = null;
+        let modelConfig = null;
+        const statusDiv = document.getElementById('status');
+        const analyzeButton = document.getElementById('analyze-button');
+        const resultDiv = document.getElementById('result');
+
+        function showStatus(message, isError = false) {
+            statusDiv.style.display = 'block';
+            statusDiv.style.color = isError ? '#d32f2f' : '#1976d2';
+            statusDiv.textContent = message;
+        }
+
+        async function loadModel() {
+            try {
+                showStatus('Завантаження моделі...');
+                
+                // Load configuration first
+                const configResponse = await fetch('tfjs_sentiment_model/model_config.json');
+                modelConfig = await configResponse.json();
+                
+                // Load model with explicit input shape handling
+                model = await tf.loadLayersModel('tfjs_sentiment_model/model.json', {
+                    strict: false
+                });
+                
+                // Warm up the model
+                const warmupInput = tf.zeros([1, modelConfig.max_len]);
+                await model.predict(warmupInput).data();
+                warmupInput.dispose();
+                
+                analyzeButton.disabled = false;
+                showStatus('Модель готова до використання');
+                
+            } catch (error) {
+                console.error('Помилка завантаження моделі:', error);
+                showStatus('Помилка завантаження моделі: ' + error.message, true);
+            }
+        }
+
+        function preprocessText(text) {
+            // Tokenize and pad the text
+            const words = text.toLowerCase()
+                .replace(/[^\w\s]/g, ' ')
+                .trim()
+                .split(/\s+/);
+            
+            // Convert to indices
+            const indices = words.map(word => 
+                modelConfig.word_index[word] || 0
+            );
+            
+            // Pad sequence
+            const padded = Array(modelConfig.max_len).fill(0);
+            indices.slice(0, modelConfig.max_len)
+                .forEach((val, i) => { padded[i] = val; });
+            
+            return tf.tensor2d([padded]);
+        }
+
+        async function analyzeSentiment() {
+            const text = document.getElementById('review-text').value.trim();
+            
+            if (!text) {
+                showStatus('Будь ласка, введіть текст для аналізу', true);
+                return;
+            }
+            
+            try {
+                analyzeButton.disabled = true;
+                showStatus('Аналізуємо текст...');
+                
+                const inputTensor = preprocessText(text);
+                const prediction = await model.predict(inputTensor).data();
+                inputTensor.dispose();
+                
+                const sentiment = prediction[0] > 0.5 ? "позитивний" : "негативний";
+                const confidence = (prediction[0] > 0.5 ? prediction[0] : 1 - prediction[0]) * 100;
+                
+                resultDiv.style.display = 'block';
+                resultDiv.style.backgroundColor = sentiment === "позитивний" ? '#e8f5e9' : '#ffebee';
+                resultDiv.innerHTML = `
+                    <strong>Результат аналізу:</strong><br>
+                    Настрій відгуку: ${sentiment}<br>
+                    Впевненість: ${confidence.toFixed(1)}%
+                `;
+                
+                showStatus('Аналіз завершено');
+                
+            } catch (error) {
+                console.error('Помилка аналізу:', error);
+                showStatus('Помилка при аналізі тексту: ' + error.message, true);
+            } finally {
+                analyzeButton.disabled = false;
+            }
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', loadModel);
+        document.getElementById('analyze-button').onclick = analyzeSentiment;
+    </script>
+</body>
+</html>
